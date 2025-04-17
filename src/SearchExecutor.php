@@ -10,23 +10,19 @@ namespace DeepResearch;
 
 use DeepResearch\DTO\SearchResult;
 use DeepResearch\Util\Logger;
+use RuntimeException;
 
 class SearchExecutor
 {
-    /**
-     * @var string Exa API密钥
-     */
-    private $apiKey;
+    private const MAX_RETRIES = 3;
+    private const RETRY_DELAY = 1; // seconds
+    private const DEFAULT_TIMEOUT = 30;
+    private const DEFAULT_CONNECT_TIMEOUT = 10;
     
-    /**
-     * @var string Exa API URL
-     */
-    private $apiUrl = 'https://api.exa.ai/search';
-    
-    /**
-     * @var Logger 日志记录器实例
-     */
-    private $logger;
+    private string $apiKey;
+    private string $apiUrl;
+    private Logger $logger;
+    private array $curlOptions;
     
     /**
      * 构造函数
@@ -34,15 +30,35 @@ class SearchExecutor
      * @param string $apiKey Exa API密钥
      * @param Logger|null $logger 可选的日志记录器实例
      * @param string|null $apiUrl 可选的API URL
+     * @throws RuntimeException 当API密钥为空时
      */
     public function __construct(string $apiKey, ?Logger $logger = null, ?string $apiUrl = null)
     {
+        if (empty($apiKey)) {
+            throw new RuntimeException('API密钥不能为空');
+        }
+        
         $this->apiKey = $apiKey;
         $this->logger = $logger ?? new Logger();
+        $this->apiUrl = $apiUrl ?? $_ENV['SEARCH_API_URL'] ?? 'https://api.exa.ai/search';
         
-        if ($apiUrl !== null) {
-            $this->apiUrl = $apiUrl;
-        }
+        // 预设CURL选项以提高性能
+        $this->curlOptions = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_TIMEOUT => self::DEFAULT_TIMEOUT,
+            CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_TCP_NODELAY => 1,
+            CURLOPT_ENCODING => 'gzip,deflate',
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'x-api-key: ' . $this->apiKey
+            ]
+        ];
+        
+        $this->logger->info("SearchExecutor 初始化完成，API URL: {$this->apiUrl}");
     }
     
     /**
@@ -51,151 +67,133 @@ class SearchExecutor
      * @param string $query 搜索查询
      * @param bool $isDeepResearch 是否为深度研究模式
      * @return SearchResult 搜索结果对象
+     * @throws RuntimeException 当搜索查询为空时
      */
     public function executeSearch(string $query, bool $isDeepResearch = false): SearchResult
     {
         if (empty($query)) {
-            $this->log("错误: 搜索查询为空");
-            return new SearchResult([], $query, date('Y-m-d H:i:s'), '搜索查询不能为空');
+            throw new RuntimeException('搜索查询不能为空');
         }
         
-        $this->log("开始执行" . ($isDeepResearch ? "深度" : "标准") . "搜索: {$query}");
+        $this->logger->info("开始执行" . ($isDeepResearch ? "深度" : "标准") . "搜索: {$query}");
         
-        // 准备请求参数
-        $requestParams = $this->prepareRequestParams($query, $isDeepResearch);
+        // 使用重试机制
+        $attempt = 0;
+        $lastError = null;
         
-        // 执行API请求
-        $result = $this->makeApiRequest($requestParams);
-        
-        if (isset($result['error'])) {
-            $this->log("搜索API错误: " . $result['error']);
-            return new SearchResult([], $query, date('Y-m-d H:i:s'), $result['error']);
+        while ($attempt < self::MAX_RETRIES) {
+            try {
+                $params = $this->prepareRequestParams($query, $isDeepResearch);
+                $result = $this->makeApiRequest($params);
+                
+                if (!isset($result['error'])) {
+                    $formattedResults = $this->formatSearchResults($result, $isDeepResearch);
+                    $this->logger->info("搜索完成，找到" . count($formattedResults) . "条结果");
+                    
+                    return new SearchResult(
+                        $formattedResults,
+                        $query,
+                        date('Y-m-d H:i:s'),
+                        null,
+                        $isDeepResearch ? 'deep_research' : 'standard'
+                    );
+                }
+                
+                throw new RuntimeException($result['error']);
+                
+            } catch (\Exception $e) {
+                $lastError = $e->getMessage();
+                $this->logger->warning("搜索尝试 {$attempt} 失败: {$lastError}");
+                
+                if (++$attempt < self::MAX_RETRIES) {
+                    sleep(self::RETRY_DELAY * $attempt);
+                    continue;
+                }
+            }
         }
         
-        // 处理搜索结果
-        $formattedResults = $this->formatSearchResults($result, $isDeepResearch);
-        
-        $this->log("搜索完成，找到" . count($formattedResults) . "条结果");
-        
-        return new SearchResult(
-            $formattedResults,
-            $query,
-            date('Y-m-d H:i:s'),
-            null,
-            $isDeepResearch ? 'deep_research' : 'standard'
-        );
+        $this->logger->error("搜索执行失败，已重试{$attempt}次: {$lastError}");
+        return new SearchResult([], $query, date('Y-m-d H:i:s'), $lastError);
     }
     
     /**
      * 准备API请求参数
-     * 
-     * @param string $query 搜索查询
-     * @param bool $isDeepResearch 是否为深度研究模式
-     * @return array 请求参数
      */
     private function prepareRequestParams(string $query, bool $isDeepResearch): array
     {
-        if ($isDeepResearch) {
-            // 深度研究模式参数
-            return [
-                'query' => $query,
-                'type' => "auto", 
-                'contents' => [
-                    'text' => [
-                        'maxCharacters' => 1500,  // 增加字符数以获取更详细信息
-                        'includeHtmlTags' => true
-                    ],
-                    'livecrawl' => "always"
+        return [
+            'query' => $query,
+            'type' => "auto",
+            'contents' => [
+                'text' => [
+                    'maxCharacters' => $isDeepResearch ? 1500 : 1000,
+                    'includeHtmlTags' => true
                 ],
-                'num_results' => 13,  // 增加结果数量
-            ];
-        } else {
-            // 标准搜索模式参数
-            return [
-                'query' => $query,
-                'type' => "auto",
-                'contents' => [
-                    'text' => [
-                        'maxCharacters' => 1000,
-                        'includeHtmlTags' => true
-                    ],
-                    'livecrawl' => "always"
-                ],
-                'num_results' => 10
-            ];
-        }
+                'livecrawl' => "always"
+            ],
+            'num_results' => $isDeepResearch ? 13 : 10
+        ];
     }
     
     /**
      * 执行API请求
      * 
-     * @param array $params 请求参数
-     * @return array 响应数据
+     * @throws RuntimeException 当请求失败时
      */
     private function makeApiRequest(array $params): array
     {
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $this->apiUrl);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($params));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $this->apiKey
-        ]);
-        
-        $result = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        
-        if ($httpCode != 200) {
-            return ['error' => '搜索API请求失败，HTTP状态码: ' . $httpCode];
+        $ch = curl_init($this->apiUrl);
+        if ($ch === false) {
+            throw new RuntimeException('无法初始化CURL');
         }
         
-        $data = json_decode($result, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return ['error' => 'JSON解析错误: ' . json_last_error_msg()];
+        try {
+            curl_setopt_array($ch, $this->curlOptions);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($params, JSON_THROW_ON_ERROR));
+            
+            $response = curl_exec($ch);
+            if ($response === false) {
+                throw new RuntimeException('CURL执行失败: ' . curl_error($ch));
+            }
+            
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            if ($httpCode !== 200) {
+                throw new RuntimeException("API请求失败，HTTP状态码: {$httpCode}");
+            }
+            
+            $data = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
+            
+            if (!isset($data['results'])) {
+                throw new RuntimeException('无效的API响应格式');
+            }
+            
+            return $data;
+            
+        } catch (\JsonException $e) {
+            throw new RuntimeException('JSON处理错误: ' . $e->getMessage());
+        } finally {
+            curl_close($ch);
         }
-        
-        return $data;
     }
     
     /**
      * 格式化搜索结果
-     * 
-     * @param array $searchData API返回的原始数据
-     * @param bool $isDeepResearch 是否为深度研究模式
-     * @return array 格式化后的结果
      */
     private function formatSearchResults(array $searchData, bool $isDeepResearch): array
     {
-        $formattedResults = [];
-        
-        if (isset($searchData['results']) && is_array($searchData['results'])) {
-            // 根据模式决定取多少条结果
-            $maxResults = $isDeepResearch ? 15 : 10;
-            
-            foreach (array_slice($searchData['results'], 0, $maxResults) as $result) {
-                $formattedResults[] = [
-                    'title' => $result['title'] ?? '未知标题',
-                    'url' => $result['url'] ?? '',
-                    'content' => $result['summary'] ?? ($result['text'] ?? ($result['snippet'] ?? '无内容'))
-                ];
-            }
+        if (!isset($searchData['results']) || !is_array($searchData['results'])) {
+            return [];
         }
         
-        return $formattedResults;
-    }
-    
-    /**
-     * 记录日志
-     * 
-     * @param string $message 日志消息
-     */
-    private function log(string $message): void
-    {
-        if ($this->logger) {
-            $this->logger->log($message);
-        }
+        $maxResults = $isDeepResearch ? 15 : 10;
+        $results = array_slice($searchData['results'], 0, $maxResults);
+        
+        return array_map(function($result) {
+            return [
+                'title' => $result['title'] ?? '未知标题',
+                'url' => $result['url'] ?? '',
+                'content' => $result['summary'] ?? $result['text'] ?? $result['snippet'] ?? '无内容'
+            ];
+        }, $results);
     }
 }

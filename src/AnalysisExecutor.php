@@ -11,39 +11,47 @@ namespace DeepResearch;
 use DeepResearch\DTO\SearchResult;
 use DeepResearch\DTO\AnalysisResult;
 use DeepResearch\Util\Logger;
+use RuntimeException;
 
 class AnalysisExecutor
 {
     /**
      * 分析提供商类型常量
      */
-    const PROVIDER_DASHSCOPE = 'dashscope';
-    const PROVIDER_OPENAI = 'openai';
+    public const PROVIDER_DASHSCOPE = 'dashscope';
+    public const PROVIDER_OPENAI = 'openai';
+    
+    private const MAX_RETRIES = 3;
+    private const RETRY_DELAY = 1; // seconds
+    private const DEFAULT_TIMEOUT = 30;
+    private const DEFAULT_CONNECT_TIMEOUT = 10;
     
     /**
      * @var string API密钥
      */
-    private $apiKey;
+    private string $apiKey;
     
     /**
      * @var string API URL
      */
-    private $apiUrl;
+    private string $apiUrl;
     
     /**
      * @var string 提供商类型
      */
-    private $providerType;
+    private string $providerType;
     
     /**
      * @var string 模型名称
      */
-    private $modelName;
+    private string $modelName;
     
     /**
      * @var Logger 日志记录器实例
      */
-    private $logger;
+    private Logger $logger;
+    
+    private array $curlOptions;
     
     /**
      * 构造函数
@@ -53,19 +61,40 @@ class AnalysisExecutor
      * @param string $providerType 提供商类型 (dashscope|openai)
      * @param string $modelName 模型名称
      * @param Logger|null $logger 可选的日志记录器实例
+     * @throws RuntimeException 当提供商类型无效时
      */
     public function __construct(
-        string $apiKey, 
-        string $apiUrl, 
+        string $apiKey,
+        string $apiUrl,
         string $providerType = self::PROVIDER_DASHSCOPE,
         string $modelName = 'qwen-plus-latest',
         ?Logger $logger = null
     ) {
+        if (!in_array($providerType, [self::PROVIDER_DASHSCOPE, self::PROVIDER_OPENAI], true)) {
+            throw new RuntimeException('无效的提供商类型');
+        }
+        
         $this->apiKey = $apiKey;
         $this->apiUrl = $apiUrl;
         $this->providerType = $providerType;
         $this->modelName = $modelName;
         $this->logger = $logger ?? new Logger();
+        
+        // 预设CURL选项以提高性能
+        $this->curlOptions = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_TIMEOUT => self::DEFAULT_TIMEOUT,
+            CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_TCP_NODELAY => 1,
+            CURLOPT_ENCODING => 'gzip,deflate',
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                $this->getAuthorizationHeader()
+            ]
+        ];
     }
     
     /**
@@ -79,6 +108,7 @@ class AnalysisExecutor
      * @param int $totalRounds 总轮次
      * @param array $searchHistory 搜索历史
      * @return AnalysisResult 分析结果对象
+     * @throws RuntimeException 当分析失败时
      */
     public function analyzeResults(
         SearchResult $searchResult,
@@ -89,9 +119,8 @@ class AnalysisExecutor
         int $totalRounds = 2,
         array $searchHistory = []
     ): AnalysisResult {
-        $this->log("开始分析搜索结果");
+        $this->logger->info("开始分析搜索结果");
         
-        // 准备分析提示
         $prompt = $this->prepareAnalysisPrompt(
             $searchResult,
             $question,
@@ -101,27 +130,35 @@ class AnalysisExecutor
             $searchHistory
         );
         
-        // 发送进度消息
         $this->sendProgress($progressCallback, "专家分析开始...");
         
-        // 根据提供商类型选择不同的API调用方法
-        if ($this->providerType === self::PROVIDER_DASHSCOPE) {
-            $analysisResult = $this->callDashScopeApi($prompt);
-        } else {
-            $analysisResult = $this->callOpenAIApi($prompt);
+        // 使用重试机制
+        $attempt = 0;
+        $lastError = null;
+        
+        while ($attempt < self::MAX_RETRIES) {
+            try {
+                $result = $this->makeApiRequest($prompt);
+                
+                $this->logger->info("搜索结果分析完成");
+                return new AnalysisResult(
+                    $result['analysis'],
+                    $result['timestamp'] ?? date('Y-m-d H:i:s')
+                );
+                
+            } catch (\Exception $e) {
+                $lastError = $e->getMessage();
+                $this->logger->warning("分析尝试 {$attempt} 失败: {$lastError}");
+                
+                if (++$attempt < self::MAX_RETRIES) {
+                    sleep(self::RETRY_DELAY * $attempt);
+                    continue;
+                }
+            }
         }
         
-        if (isset($analysisResult['error'])) {
-            $this->log("分析API错误: " . $analysisResult['error']);
-            return new AnalysisResult('', date('Y-m-d H:i:s'), $analysisResult['error']);
-        }
-        
-        $this->log("搜索结果分析完成");
-        
-        return new AnalysisResult(
-            $analysisResult['analysis'],
-            $analysisResult['timestamp'] ?? date('Y-m-d H:i:s')
-        );
+        $this->logger->error("分析执行失败，已重试{$attempt}次: {$lastError}");
+        throw new RuntimeException("分析执行失败: {$lastError}");
     }
     
     /**
@@ -143,164 +180,115 @@ class AnalysisExecutor
         int $totalRounds,
         array $searchHistory
     ): string {
-        $context = "请分析以下搜索结果，提取关键信息，并指出下一步应该深入研究的方向。\n\n";
-        $context .= "原始问题: " . $question . "\n\n";
-        $context .= "当前研究进度: 第 {$currentRound} 轮（共 {$totalRounds} 轮）\n\n";
-
-        // 添加搜索历史
-        if (!empty($searchHistory)) {
-            $context .= "搜索历史:\n";
-            foreach ($searchHistory as $historyItem) {
-                $context .= "第 {$historyItem['round']} 轮: \"{$historyItem['query']}\"\n";
-            }
-            $context .= "\n";
-        }
+        $context = "# 最重要的要求\n";
+        $context .= "你的回复不能拖沓，必须要精炼，节省字数。\n";
+        $context .= "你需要查看之前的分析，判断是否偏离最初的方向，如果你认为偏离方向，请将方向拉回。\n\n";
+        
+        $context .= "# 角色设定\n";
+        $context .= "你是一位在各种领域经验丰富、洞察力深刻的顶级专家分析师。\n";
+        $context .= "你的思维严谨、注重细节，并擅长从复杂信息中提炼核心观点和发现隐藏的联系。\n\n";
+        
+        $context .= "# 背景情境\n";
+        $context .= "你是一个多 Agent 协作研究系统中的关键环节。\n";
+        $context .= "此前，一个搜索引擎 Agent 已经围绕核心研究主题收集了相关的资料。\n";
+        $context .= "现在，这些原始资料将提供给你进行专业的深度分析。\n";
+        $context .= "你的分析结果将作为后续合成报告或决策制定的重要依据。\n\n";
+        
+        $context .= "# 研究主题\n{$question}\n\n";
         
         if ($previousAnalysis) {
-            $context .= "先前分析: " . $previousAnalysis . "\n\n";
+            $context .= "# 先前分析\n{$previousAnalysis}\n\n";
         }
         
-        $context .= "搜索结果:\n";
+        $context .= "# 当前进度\n";
+        $context .= "这是第 {$currentRound} 轮分析（共 {$totalRounds} 轮）\n\n";
+        
+        $context .= "# 搜索历史\n";
+        foreach ($searchHistory as $history) {
+            $context .= "第 {$history['round']} 轮: {$history['query']}\n";
+        }
+        $context .= "\n";
+        
+        $context .= "# 本轮搜索结果\n";
         foreach ($searchResult->getResults() as $index => $result) {
-            $context .= "来源 " . ($index + 1) . ": " . $result['title'] . "\n";
-            $context .= "网址: " . $result['url'] . "\n";
-            $context .= "内容: " . $result['content'] . "\n\n";
+            $context .= "\n文章 " . ($index + 1) . ":\n";
+            $context .= "标题: {$result['title']}\n";
+            $context .= "链接: {$result['url']}\n";
+            $context .= "内容: {$result['content']}\n";
         }
-        
-        // 修改提示，要求提供下一轮搜索关键词，并考虑全局研究计划
-        $context .= "请对以下搜索结果进行分析，输出包括：
-    - 每条信息的关键信息汇总在一起，可在其中关键位置说明来自什么来源
-    - 来源信息之间的异同、矛盾或空白
-    - 你对这些信息的整体看法与分析（重要，包含正反面）
-    ";
-
-        // 如果不是最后一轮，请求下一轮搜索关键词
-        if ($currentRound < $totalRounds) {
-            $context .= "最后，请明确给出下一轮搜索应使用的关键词，格式如下：
-    <NEXT_QUERY>你建议的下一轮搜索关键词</NEXT_QUERY>
-    ### 只需要一个<NEXT_QUERY></NEXT_QUERY> 即可 ###
-
-    请根据当前分析结果和搜索历史，选择能够更深入探索主题、填补信息空白或解决疑问的关键词。考虑到这是第 {$currentRound} 轮（共 {$totalRounds} 轮）研究，你的目标是通过后续 " . ($totalRounds - $currentRound) . " 轮搜索全面探索主题的各个方面。
-
-    注意不要重复之前已出现在搜索关键词中的内容，而是选择能够扩展知识面、提供新视角或深入细节的新的关键词。理想情况下，每轮搜索都应该为总体研究贡献新的洞见。
-    ";
-        }
-
-        $context .= "请使用分段或条列形式组织文字，保持内容紧凑、有条理。生成的内容将用于后续模型整合使用。";
         
         return $context;
     }
     
     /**
-     * 调用DashScope API
+     * 执行API请求
      * 
-     * @param string $prompt 分析提示
-     * @return array 分析结果
+     * @throws RuntimeException 当请求失败时
      */
-    private function callDashScopeApi(string $prompt): array
+    private function makeApiRequest(string $prompt): array
     {
-        $this->log("调用DashScope API进行分析");
-        
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $this->apiUrl);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
-            'model' => $this->modelName,
-            'messages' => [
-                ['role' => 'system', 'content' => '# 最重要的要求 你的回复不能拖沓，必须要精炼，节省字数。你需要查看之前的分析，判断是否偏离最初的方向，如果你认为偏离方向，请将方向拉回。 # 角色设定 你是一位在各种领域经验丰富、洞察力深刻的顶级专家分析师。你的思维严谨、注重细节，并擅长从复杂信息中提炼核心观点和发现隐藏的联系。 # 背景情境 你是一个多 Agent 协作研究系统中的关键环节。此前，一个搜索引擎 Agent 已经围绕核心研究主题收集了相关的资料。现在，这些原始资料将提供给你进行专业的深度分析。你的分析结果将作为后续合成报告或决策制定的重要依据。 '],
-                ['role' => 'user', 'content' => $prompt]
-            ],
-            'temperature' => 0.6
-        ]));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: application/json',
-            'Authorization: ' . $this->apiKey
-        ]);
-        
-        $result = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        
-        if ($httpCode != 200) {
-            return ['error' => '分析API请求失败，HTTP状态码: ' . $httpCode];
+        $ch = curl_init($this->apiUrl);
+        if ($ch === false) {
+            throw new RuntimeException('无法初始化CURL');
         }
         
-        $data = json_decode($result, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return ['error' => 'JSON解析错误: ' . json_last_error_msg()];
-        }
-        
-        if (isset($data['choices'][0]['message']['content'])) {
+        try {
+            $payload = $this->prepareApiPayload($prompt);
+            
+            curl_setopt_array($ch, $this->curlOptions);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload, JSON_THROW_ON_ERROR));
+            
+            $response = curl_exec($ch);
+            if ($response === false) {
+                throw new RuntimeException('CURL执行失败: ' . curl_error($ch));
+            }
+            
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            if ($httpCode !== 200) {
+                throw new RuntimeException("API请求失败，HTTP状态码: {$httpCode}");
+            }
+            
+            $data = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
+            
+            if (!isset($data['choices'][0]['message']['content'])) {
+                throw new RuntimeException('无效的API响应格式');
+            }
+            
             return [
                 'analysis' => $data['choices'][0]['message']['content'],
                 'timestamp' => date('Y-m-d H:i:s')
             ];
-        } else {
-            return ['error' => '无法从API响应中提取分析结果'];
+            
+        } catch (\JsonException $e) {
+            throw new RuntimeException('JSON处理错误: ' . $e->getMessage());
+        } finally {
+            curl_close($ch);
         }
     }
     
     /**
-     * 调用OpenAI API
-     * 
-     * @param string $prompt 分析提示
-     * @return array 分析结果
+     * 准备API请求负载
      */
-    private function callOpenAIApi(string $prompt): array
+    private function prepareApiPayload(string $prompt): array
     {
-        $this->log("调用OpenAI API进行分析");
-        
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $this->apiUrl);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+        return [
             'model' => $this->modelName,
             'messages' => [
-                ['role' => 'system', 'content' => '# 最重要的要求 你的回复不能拖沓，必须要精炼，节省字数。你需要查看之前的分析，判断是否偏离最初的方向，如果你认为偏离方向，请将方向拉回。 # 角色设定 你是一位在各种领域经验丰富、洞察力深刻的顶级专家分析师。你的思维严谨、注重细节，并擅长从复杂信息中提炼核心观点和发现隐藏的联系。 # 背景情境 你是一个多 Agent 协作研究系统中的关键环节。此前，一个搜索引擎 Agent 已经围绕核心研究主题收集了相关的资料。现在，这些原始资料将提供给你进行专业的深度分析。你的分析结果将作为后续合成报告或决策制定的重要依据。 '],
+                ['role' => 'system', 'content' => '你是一位专业的研究分析助手，请根据提供的搜索结果进行深入分析。'],
                 ['role' => 'user', 'content' => $prompt]
             ],
             'temperature' => 0.6
-        ]));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: application/json',
-            'Authorization: ' . $this->apiKey
-        ]);
-        
-        $result = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        
-        if ($httpCode != 200) {
-            return ['error' => '分析API请求失败，HTTP状态码: ' . $httpCode];
-        }
-        
-        $data = json_decode($result, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return ['error' => 'JSON解析错误: ' . json_last_error_msg()];
-        }
-        
-        if (isset($data['choices'][0]['message']['content'])) {
-            return [
-                'analysis' => $data['choices'][0]['message']['content'],
-                'timestamp' => date('Y-m-d H:i:s')
-            ];
-        } else {
-            return ['error' => '无法从API响应中提取分析结果'];
-        }
+        ];
     }
     
     /**
-     * 记录日志
-     * 
-     * @param string $message 日志消息
+     * 获取授权头
      */
-    private function log(string $message): void
+    private function getAuthorizationHeader(): string
     {
-        if ($this->logger) {
-            $this->logger->log($message);
-        }
+        return $this->providerType === self::PROVIDER_OPENAI
+            ? 'Authorization: Bearer ' . $this->apiKey
+            : 'Authorization: ' . $this->apiKey;
     }
     
     /**
@@ -311,8 +299,8 @@ class AnalysisExecutor
      */
     private function sendProgress(?callable $callback, string $message): void
     {
-        if ($callback !== null && is_callable($callback)) {
-            call_user_func($callback, $message);
+        if ($callback !== null) {
+            $callback($message);
         }
     }
 }

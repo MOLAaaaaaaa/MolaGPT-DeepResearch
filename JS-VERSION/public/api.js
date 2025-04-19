@@ -46,7 +46,6 @@ const searchExecutor = new SearchExecutor(
 const analysisExecutor = new AnalysisExecutor(
     config.analysis_dashscope.api_key,
     config.analysis_dashscope.api_url,
-    config.analysis_dashscope.provider,
     config.analysis_dashscope.model,
     logger
 );

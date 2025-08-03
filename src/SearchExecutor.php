@@ -24,6 +24,11 @@ class SearchExecutor
     private $apiUrl = 'https://api.exa.ai/search';
     
     /**
+     * @var string|null 内容读取器服务的URL
+     */
+    private $readerApiUrl;
+    
+    /**
      * @var Logger 日志记录器实例
      */
     private $logger;
@@ -34,11 +39,13 @@ class SearchExecutor
      * @param string $apiKey Exa API密钥
      * @param Logger|null $logger 可选的日志记录器实例
      * @param string|null $apiUrl 可选的API URL
+     * @param string|null $readerApiUrl 可选的内容读取器服务URL
      */
-    public function __construct(string $apiKey, ?Logger $logger = null, ?string $apiUrl = null)
+    public function __construct(string $apiKey, ?Logger $logger = null, ?string $apiUrl = null, ?string $readerApiUrl = null)
     {
         $this->apiKey = $apiKey;
         $this->logger = $logger ?? new Logger();
+        $this->readerApiUrl = $readerApiUrl;
         
         if ($apiUrl !== null) {
             $this->apiUrl = $apiUrl;
@@ -185,6 +192,57 @@ class SearchExecutor
         }
         
         return $formattedResults;
+    }
+    
+    /**
+     * 从指定的URL提取主要内容
+     * 
+     * @param string $url 要提取内容的URL
+     * @return string|null 提取的文本内容，如果失败则返回null
+     */
+    public function getContentFromUrl(string $url): ?string
+    {
+        if (empty($this->readerApiUrl)) {
+            $this->log("内容读取器服务未配置，无法从URL提取内容。");
+            return null;
+        }
+
+        $this->log("开始从URL提取内容: {$url}");
+
+        $ch = curl_init($this->readerApiUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['url' => $url]));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Accept: application/json'
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30); // 30秒超时
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if (curl_errno($ch)) {
+            $this->log("调用内容读取器服务失败: " . curl_error($ch));
+            curl_close($ch);
+            return null;
+        }
+
+        curl_close($ch);
+
+        if ($httpCode !== 200) {
+            $this->log("内容读取器服务返回错误状态码: {$httpCode}. 响应: {$response}");
+            return null;
+        }
+
+        $result = json_decode($response, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !isset($result['content'])) {
+            $this->log("无法解析内容读取器服务的响应或响应中缺少'content'字段。");
+            return null;
+        }
+
+        $this->log("成功从URL提取内容。");
+        return $result['content'];
     }
     
     /**

@@ -1,0 +1,17 @@
+# Ignore Composer dependencies
+/vendor/
+
+# Ignore environment files
+.env
+
+# Ignore log files
+/logs/*.log
+!/logs/.gitkeep
+
+# Ignore IDE and OS specific files
+.vscode/
+.idea/
+.DS_Store
+*.swo
+*.swp
+*~

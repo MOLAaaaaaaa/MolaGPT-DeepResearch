@@ -46,6 +46,21 @@ class AnalysisExecutor
     private $logger;
     
     /**
+     * @var string|null 工具规划器API密钥
+     */
+    private $plannerApiKey;
+    
+    /**
+     * @var string|null 工具规划器API URL
+     */
+    private $plannerApiUrl;
+    
+    /**
+     * @var string|null 工具规划器模型名称
+     */
+    private $plannerModel;
+    
+    /**
      * 构造函数
      * 
      * @param string $apiKey API密钥
@@ -53,19 +68,28 @@ class AnalysisExecutor
      * @param string $providerType 提供商类型 (dashscope|openai)
      * @param string $modelName 模型名称
      * @param Logger|null $logger 可选的日志记录器实例
+     * @param string|null $plannerApiKey 可选的工具规划器API密钥
+     * @param string|null $plannerApiUrl 可选的工具规划器API URL
+     * @param string|null $plannerModel 可选的工具规划器模型名称
      */
     public function __construct(
         string $apiKey, 
         string $apiUrl, 
         string $providerType = self::PROVIDER_DASHSCOPE,
         string $modelName = 'qwen-plus-latest',
-        ?Logger $logger = null
+        ?Logger $logger = null,
+        ?string $plannerApiKey = null,
+        ?string $plannerApiUrl = null,
+        ?string $plannerModel = null
     ) {
         $this->apiKey = $apiKey;
         $this->apiUrl = $apiUrl;
         $this->providerType = $providerType;
         $this->modelName = $modelName;
         $this->logger = $logger ?? new Logger();
+        $this->plannerApiKey = $plannerApiKey;
+        $this->plannerApiUrl = $plannerApiUrl;
+        $this->plannerModel = $plannerModel;
     }
     
     /**
@@ -292,6 +316,189 @@ class AnalysisExecutor
     }
     
     /**
+     * 规划下一步应使用的工具
+     * 
+     * @param string $query 用户查询
+     * @param string $context 当前上下文
+     * @param bool $hasReaderService 是否配置了内容读取器服务
+     * @return array 工具规划结果 ['tool' => 'search'|'read_url', 'target' => '搜索关键词或URL']
+     */
+    public function planTool(string $query, string $context = '', bool $hasReaderService = false): array
+    {
+        if (empty($this->plannerApiKey) || empty($this->plannerApiUrl)) {
+            // 如果没有配置规划器，默认使用搜索工具
+            $this->log("工具规划器未配置，默认使用搜索工具");
+            return [
+                'tool' => 'search',
+                'target' => $query
+            ];
+        }
+
+        $this->log("开始工具规划...");
+
+        // 构建工具规划的提示
+        $prompt = $this->buildPlannerPrompt($query, $context, $hasReaderService);
+        
+        // 调用规划器API
+        $planResult = $this->callPlannerApi($prompt);
+        
+        if (isset($planResult['error'])) {
+            $this->log("工具规划失败: " . $planResult['error']);
+            // 规划失败时默认使用搜索
+            return [
+                'tool' => 'search',
+                'target' => $query
+            ];
+        }
+
+        // 解析规划结果
+        return $this->parsePlanResult($planResult['response']);
+    }
+    
+    /**
+     * 构建工具规划的提示
+     * 
+     * @param string $query 用户查询
+     * @param string $context 当前上下文
+     * @param bool $hasReaderService 是否有读取器服务
+     * @return string 规划提示
+     */
+    private function buildPlannerPrompt(string $query, string $context, bool $hasReaderService): string
+    {
+        $availableTools = "1. search - 执行网络搜索以获取相关信息";
+        if ($hasReaderService) {
+            $availableTools .= "\n2. read_url - 从指定的URL读取完整内容";
+        }
+
+        $prompt = "你是一个工具规划专家。根据用户的查询和当前上下文，选择最合适的工具来获取信息。
+
+可用工具:
+{$availableTools}
+
+用户查询: {$query}
+
+当前上下文: " . ($context ?: "无") . "
+
+请分析查询内容，并选择最合适的工具。如果查询中包含具体的URL或者明确要求分析某个网页内容，选择read_url工具；否则选择search工具进行网络搜索。
+
+请严格按照以下JSON格式返回:
+{
+    \"tool\": \"search\" 或 \"read_url\",
+    \"target\": \"搜索关键词或URL\",
+    \"reason\": \"选择此工具的原因\"
+}
+
+只返回JSON，不要包含其他文字。";
+
+        return $prompt;
+    }
+    
+    /**
+     * 调用工具规划器API
+     * 
+     * @param string $prompt 规划提示
+     * @return array 规划结果
+     */
+    private function callPlannerApi(string $prompt): array
+    {
+        $ch = curl_init();
+        
+        $requestData = [
+            'model' => $this->plannerModel,
+            'messages' => [
+                ['role' => 'user', 'content' => $prompt]
+            ],
+            'temperature' => 0.3,
+            'max_tokens' => 500
+        ];
+
+        curl_setopt($ch, CURLOPT_URL, $this->plannerApiUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($requestData));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Authorization: ' . $this->plannerApiKey
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+
+        $result = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if (curl_errno($ch)) {
+            curl_close($ch);
+            return ['error' => 'cURL请求失败: ' . curl_error($ch)];
+        }
+
+        curl_close($ch);
+
+        if ($httpCode !== 200) {
+            return ['error' => '规划器API请求失败，HTTP状态码: ' . $httpCode];
+        }
+
+        $data = json_decode($result, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return ['error' => 'JSON解析错误: ' . json_last_error_msg()];
+        }
+
+        if (isset($data['choices'][0]['message']['content'])) {
+            return ['response' => $data['choices'][0]['message']['content']];
+        } else {
+            return ['error' => '无法从规划器API响应中提取结果'];
+        }
+    }
+    
+    /**
+     * 解析规划结果
+     * 
+     * @param string $response 规划器响应
+     * @return array 解析后的规划结果
+     */
+    private function parsePlanResult(string $response): array
+    {
+        // 尝试解析JSON响应
+        $jsonData = json_decode($response, true);
+        
+        if (json_last_error() === JSON_ERROR_NONE && isset($jsonData['tool'])) {
+            $tool = $jsonData['tool'];
+            $target = $jsonData['target'] ?? '';
+            
+            // 验证工具类型
+            if (!in_array($tool, ['search', 'read_url'])) {
+                $tool = 'search';
+            }
+            
+            $this->log("工具规划完成: {$tool} -> {$target}");
+            
+            return [
+                'tool' => $tool,
+                'target' => $target,
+                'reason' => $jsonData['reason'] ?? ''
+            ];
+        }
+        
+        // 如果JSON解析失败，尝试从文本中提取信息
+        if (strpos($response, 'read_url') !== false) {
+            // 尝试提取URL
+            if (preg_match('/https?:\/\/[^\s]+/', $response, $matches)) {
+                return [
+                    'tool' => 'read_url',
+                    'target' => $matches[0],
+                    'reason' => '从响应中检测到URL'
+                ];
+            }
+        }
+        
+        // 默认返回搜索工具
+        $this->log("无法解析规划结果，默认使用搜索工具");
+        return [
+            'tool' => 'search',
+            'target' => $response, // 使用整个响应作为搜索关键词
+            'reason' => '解析失败，使用默认搜索'
+        ];
+    }
+    
+    /**
      * 记录日志
      * 
      * @param string $message 日志消息
@@ -314,5 +521,45 @@ class AnalysisExecutor
         if ($callback !== null && is_callable($callback)) {
             call_user_func($callback, $message);
         }
+    }
+    
+    /**
+     * 获取提供商类型
+     * 
+     * @return string 提供商类型
+     */
+    public function getProviderType(): string
+    {
+        return $this->providerType;
+    }
+    
+    /**
+     * 获取API密钥
+     * 
+     * @return string API密钥
+     */
+    public function getApiKey(): string
+    {
+        return $this->apiKey;
+    }
+    
+    /**
+     * 获取API URL
+     * 
+     * @return string API URL
+     */
+    public function getApiUrl(): string
+    {
+        return $this->apiUrl;
+    }
+    
+    /**
+     * 获取模型名称
+     * 
+     * @return string 模型名称
+     */
+    public function getModelName(): string
+    {
+        return $this->modelName;
     }
 }

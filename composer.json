@@ -1,16 +1,17 @@
 {
-    "name": "deep-research-core",
+    "name": "molagpt/deep-research-core",
     "description": "一个用于执行多轮搜索与深度分析的PHP库，专为AI Agent开发者设计",
     "type": "library",
     "license": "MIT",
     "authors": [
         {
-            "name": "Your Name",
-            "email": "your.email@example.com"
+            "name": "GreatMOLA",
+            "email": "mola@wljay.cn"
         }
     ],
     "require": {
-        "php": ">=7.4"
+        "php": ">=7.4",
+        "vlucas/phpdotenv": "^5.5"
     },
     "autoload": {
         "psr-4": {

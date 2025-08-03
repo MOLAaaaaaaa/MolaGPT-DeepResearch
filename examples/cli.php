@@ -2,7 +2,33 @@
 /**
  * cli.php - 示例CLI调用入口
  * 
- * 该文件展示了如何在命令行环境中使用深度研究功能。
+ * 该文    // 创建搜索执行器
+    $searchExecutor = new SearchExecutor(
+        $config['search']['api_key'],
+        $logger,
+        $config['search']['api_url'],
+        $config['reader']['api_url'] ?? null // 可选的内容读取器服务
+    );
+    
+    // 创建分析执行器
+    $analysisExecutor = new AnalysisExecutor(
+        $config['analysis']['api_key'],
+        $config['analysis']['api_url'],
+        $config['analysis']['provider'],
+        $config['analysis']['model'],
+        $logger,
+        $config['planner']['api_key'] ?? null,
+        $config['planner']['api_url'] ?? null,
+        $config['planner']['model'] ?? null
+    );
+    
+    // 创建深度研究管道
+    $pipeline = new DeepResearchPipeline(
+        $searchExecutor, 
+        $analysisExecutor, 
+        $logger,
+        !empty($config['reader']['api_url']) // 是否配置了内容读取器服务
+    );究功能。
  * 使用方法: php cli.php "你的研究问题" [研究深度]
  */
 
@@ -59,14 +85,76 @@ try {
     // 创建深度研究管道
     $pipeline = new DeepResearchPipeline($searchExecutor, $analysisExecutor, $logger);
     
-    // 进度回调函数
-    $progressCallback = function($message) {
-        echo "[进度] " . $message . PHP_EOL;
+    // 事件回调函数 - 支持新的事件流机制
+    $eventCallback = function($eventType, $data) {
+        switch ($eventType) {
+            case 'research_start':
+                echo "[开始] 深度研究启动，查询: {$data['query']}，深度: {$data['depth']}\n";
+                if ($data['has_reader_service']) {
+                    echo "[信息] 已启用内容读取器服务\n";
+                }
+                break;
+                
+            case 'round_start':
+                echo "\n[轮次] === 第 {$data['round']} 轮 / 共 {$data['total_rounds']} 轮 ===\n";
+                break;
+                
+            case 'planning_start':
+                echo "[规划] 正在规划第 {$data['round']} 轮使用的工具...\n";
+                break;
+                
+            case 'planning_complete':
+                echo "[规划] 决定使用工具: {$data['tool']} -> {$data['target']}\n";
+                if (!empty($data['reason'])) {
+                    echo "[规划] 原因: {$data['reason']}\n";
+                }
+                break;
+                
+            case 'tool_start':
+                echo "[工具] 开始执行: {$data['tool']} ({$data['target']})\n";
+                break;
+                
+            case 'tool_output':
+                if ($data['tool'] === 'search') {
+                    echo "[工具] 搜索完成，找到 {$data['results_count']} 条结果\n";
+                } elseif ($data['tool'] === 'read_url') {
+                    echo "[工具] URL读取完成，内容长度: {$data['content_length']} 字符\n";
+                }
+                break;
+                
+            case 'analysis_start':
+                echo "[分析] 开始分析第 {$data['round']} 轮的结果...\n";
+                break;
+                
+            case 'analysis_complete':
+                echo "[分析] 第 {$data['round']} 轮分析完成\n";
+                break;
+                
+            case 'round_complete':
+                echo "[完成] 第 {$data['round']} 轮研究完成\n";
+                break;
+                
+            case 'final_report_start':
+                echo "\n[总结] 开始生成最终研究报告...\n";
+                break;
+                
+            case 'research_complete':
+                echo "[完成] 深度研究完成！\n";
+                break;
+                
+            case 'error':
+                echo "[错误] {$data['message']}\n";
+                break;
+                
+            default:
+                echo "[事件] {$eventType}\n";
+                break;
+        }
     };
     
     // 执行深度研究
     echo "开始对 \"{$question}\" 进行深度研究 (深度: {$depth})...\n";
-    $result = $pipeline->executeResearch($question, $question, $depth, $progressCallback);
+    $result = $pipeline->executeResearch($question, $question, $depth, $eventCallback);
     
     // 检查是否有错误
     if (isset($result['error'])) {

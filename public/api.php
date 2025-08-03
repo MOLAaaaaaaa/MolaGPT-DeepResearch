@@ -7,7 +7,8 @@
  */
 
 // 设置响应头
-header('Content-Type: application/json');
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
@@ -21,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // 检查请求方法
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    echo json_encode(['error' => '只支持POST请求方法']);
+    echo "data: " . json_encode(['error' => '只支持POST请求方法']) . "\n\n";
     exit;
 }
 
@@ -42,12 +43,14 @@ try {
     // 验证请求参数
     if (!isset($requestData['query']) || empty($requestData['query'])) {
         http_response_code(400);
-        echo json_encode(['error' => '缺少必要参数: query']);
+        echo "data: " . json_encode(['error' => '缺少必要参数: query']) . "\n\n";
         exit;
     }
     
     $query = $requestData['query'];
     $depth = isset($requestData['depth']) ? (int)$requestData['depth'] : 2;
+    $rounds = isset($requestData['rounds']) ? (int)$requestData['rounds'] : $depth; // 支持rounds参数
+    $focus = isset($requestData['focus']) ? $requestData['focus'] : '';
     
     // 创建日志目录
     $logDir = __DIR__ . '/../logs';
@@ -66,62 +69,80 @@ try {
     $searchExecutor = new SearchExecutor(
         $config['search']['api_key'],
         $logger,
-        $config['search']['api_url']
+        $config['search']['api_url'],
+        $config['reader']['api_url'] ?? null
     );
     
-    // 创建分析执行器 (使用DashScope)
+    // 创建分析执行器
     $analysisExecutor = new AnalysisExecutor(
-        $config['analysis_dashscope']['api_key'],
-        $config['analysis_dashscope']['api_url'],
-        $config['analysis_dashscope']['provider'],
-        $config['analysis_dashscope']['model'],
-        $logger
+        $config['analysis']['api_key'],
+        $config['analysis']['api_url'],
+        $config['analysis']['provider'],
+        $config['analysis']['model'],
+        $logger,
+        $config['planner']['api_key'] ?? null,
+        $config['planner']['api_url'] ?? null,
+        $config['planner']['model'] ?? null
     );
     
     // 创建深度研究管道
-    $pipeline = new DeepResearchPipeline($searchExecutor, $analysisExecutor, $logger);
+    $pipeline = new DeepResearchPipeline(
+        $searchExecutor, 
+        $analysisExecutor, 
+        $logger,
+        !empty($config['reader']['api_url'])
+    );
     
-    // 进度存储
-    $progressMessages = [];
-    
-    // 进度回调函数
-    $progressCallback = function($message) use (&$progressMessages) {
-        $progressMessages[] = $message;
+    // 事件回调函数 - 改为流式输出
+    $eventCallback = function($eventType, $data) {
+        $event = [
+            'type' => $eventType,
+            'message' => is_string($data) ? $data : json_encode($data),
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+        
+        echo "data: " . json_encode($event) . "\n\n";
+        flush();
+        if (ob_get_level()) {
+            ob_flush();
+        }
     };
     
     // 执行深度研究
-    $result = $pipeline->executeResearch($query, $query, $depth, $progressCallback);
+    $finalQuery = !empty($focus) ? "{$query} (重点关注: {$focus})" : $query;
+    $result = $pipeline->executeResearch($finalQuery, $query, $rounds, $eventCallback);
     
     // 检查是否有错误
     if (isset($result['error'])) {
-        http_response_code(500);
-        echo json_encode([
-            'success' => false,
-            'error' => $result['error'],
-            'progress' => $progressMessages
-        ]);
+        $errorEvent = [
+            'type' => 'error',
+            'message' => $result['error'],
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+        echo "data: " . json_encode($errorEvent) . "\n\n";
+        flush();
         exit;
     }
     
-    // 返回成功结果
-    echo json_encode([
-        'success' => true,
-        'query' => $query,
-        'depth' => $depth,
-        'analysis' => $result['analysis'],
-        'search_history' => $result['search_history'],
-        'progress' => $progressMessages,
+    // 发送完成事件
+    $completeEvent = [
+        'type' => 'complete',
+        'data' => $result['analysis'] ?? '研究完成',
         'timestamp' => date('Y-m-d H:i:s')
-    ]);
+    ];
+    echo "data: " . json_encode($completeEvent) . "\n\n";
+    flush();
     
     $logger->info("API请求完成: {$query}");
     
 } catch (Exception $e) {
     $logger->error("API异常: " . $e->getMessage());
     
-    http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'error' => '服务器内部错误: ' . $e->getMessage()
-    ]);
+    $errorEvent = [
+        'type' => 'error', 
+        'message' => '服务器内部错误: ' . $e->getMessage(),
+        'timestamp' => date('Y-m-d H:i:s')
+    ];
+    echo "data: " . json_encode($errorEvent) . "\n\n";
+    flush();
 }

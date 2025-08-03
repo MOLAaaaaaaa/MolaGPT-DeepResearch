@@ -52,6 +52,9 @@ try {
     $rounds = isset($requestData['rounds']) ? (int)$requestData['rounds'] : $depth; // 支持rounds参数
     $focus = isset($requestData['focus']) ? $requestData['focus'] : '';
     
+    // 支持前端传递的配置
+    $frontendConfig = isset($requestData['config']) ? $requestData['config'] : [];
+    
     // 创建日志目录
     $logDir = __DIR__ . '/../logs';
     if (!is_dir($logDir)) {
@@ -64,6 +67,36 @@ try {
     
     // 加载配置
     $config = require_once __DIR__ . '/../config/config.php';
+    
+    // 如果前端提供了配置，则优先使用前端配置
+    if (!empty($frontendConfig)) {
+        if (!empty($frontendConfig['exaApiKey'])) {
+            $config['search']['api_key'] = $frontendConfig['exaApiKey'];
+        }
+        if (!empty($frontendConfig['analysisProvider'])) {
+            $config['analysis']['provider'] = $frontendConfig['analysisProvider'];
+        }
+        if (!empty($frontendConfig['dashscopeApiKey']) && $config['analysis']['provider'] === 'dashscope') {
+            $config['analysis']['api_key'] = $frontendConfig['dashscopeApiKey'];
+        }
+        if (!empty($frontendConfig['openaiApiKey']) && $config['analysis']['provider'] === 'openai') {
+            $config['analysis']['api_key'] = $frontendConfig['openaiApiKey'];
+        }
+        if (!empty($frontendConfig['plannerApiKey'])) {
+            $config['planner']['api_key'] = $frontendConfig['plannerApiKey'];
+        }
+        if (!empty($frontendConfig['readerApiUrl'])) {
+            $config['reader']['api_url'] = $frontendConfig['readerApiUrl'];
+        }
+        
+        // 添加模型配置支持
+        if (!empty($frontendConfig['analysisModel'])) {
+            $config['analysis']['model'] = $frontendConfig['analysisModel'];
+        }
+        if (!empty($frontendConfig['plannerModel'])) {
+            $config['planner']['model'] = $frontendConfig['plannerModel'];
+        }
+    }
     
     // 创建搜索执行器
     $searchExecutor = new SearchExecutor(

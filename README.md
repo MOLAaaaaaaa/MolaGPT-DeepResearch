@@ -173,7 +173,13 @@ curl -X POST http://localhost/public/api.php \
 
 我们提供了一个完整的Web界面Demo，让您可以直观地体验Deep Research的强大功能。
 
-### 启动Demo
+### 🌐 在线体验
+
+访问我们的在线Demo：**https://molaaaaaa.github.io/MolaGPT-DeepResearch/**
+
+> **注意**：在线版本是纯前端演示，提供模拟的研究流程。要体验真实的AI功能，请下载到本地运行。
+
+### 🏠 本地Demo
 
 1. **配置环境**：
    ```bash
@@ -199,6 +205,7 @@ curl -X POST http://localhost/public/api.php \
 ### Demo功能特色
 
 - **🎯 交互式研究界面**：直观的研究主题输入和配置选项
+- **🔑 自定义API配置**：支持在界面中直接配置各种API密钥
 - **⚡ 实时进度追踪**：流式显示搜索、分析、工具规划等各个阶段
 - **📊 可视化结果**：结构化展示研究报告和过程数据
 - **🔧 灵活配置**：支持1-5轮研究深度，可指定研究重点
@@ -387,4 +394,4 @@ MIT License
 
 ## 📞 支持
 
-如有问题，请在 GitHub 上创建 Issue 或联系 mola[at]wljay.cn!
+如有问题，请在 GitHub 上创建 Issue 或联系维护者。

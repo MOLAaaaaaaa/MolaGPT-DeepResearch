@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MolaGPT 深度研究 - 在线Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f7fa;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #2d3748;
+            border-bottom: 3px solid #4299e1;
+            padding-bottom: 10px;
+        }
+        .notice {
+            background: #ebf8ff;
+            border: 1px solid #90cdf4;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .notice h3 {
+            margin-top: 0;
+            color: #2b6cb0;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #4a5568;
+        }
+        input[type="text"], input[type="password"], textarea, select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        input[type="text"]:focus, input[type="password"]:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #4299e1;
+        }
+        textarea {
+            height: 120px;
+            resize: vertical;
+        }
+        button {
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background: #a0aec0;
+            transform: none;
+            cursor: not-allowed;
+        }
+        .loading {
+            display: none;
+            color: #4299e1;
+            font-style: italic;
+        }
+        .result-container {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f7fafc;
+            border-radius: 8px;
+            border-left: 4px solid #4299e1;
+        }
+        .event-log {
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+        .event-item {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .api-status {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+        }
+        .status-indicator {
+            font-size: 20px;
+            margin-right: 10px;
+        }
+        small {
+            display: block;
+            color: #666;
+            margin-top: 5px;
+            font-size: 12px;
+        }
+        small a {
+            color: #4299e1;
+            text-decoration: none;
+        }
+        small a:hover {
+            text-decoration: underline;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        .tab.active {
+            border-bottom-color: #4299e1;
+            color: #4299e1;
+            font-weight: 600;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .demo-section {
+            background: #fff8dc;
+            border: 1px solid #f6e05e;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 MolaGPT 深度研究 - 在线Demo</h1>
+        
+        <div class="notice">
+            <h3>📢 欢迎使用在线Demo</h3>
+            <p>这是一个纯前端的演示版本，托管在GitHub Pages上。由于安全限制，此版本无法直接调用后端API，但您可以：</p>
+            <ul>
+                <li>体验完整的用户界面和配置功能</li>
+                <li>了解系统的功能特性和使用方法</li>
+                <li>下载源码到本地运行完整版本</li>
+            </ul>
+        </div>
+        
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('demo')">交互式演示</div>
+            <div class="tab" onclick="switchTab('config')">API 配置</div>
+            <div class="tab" onclick="switchTab('download')">下载说明</div>
+        </div>
+
+        <!-- 交互式演示 -->
+        <div id="demo" class="tab-content active">
+            <div class="demo-section">
+                <h3>🎮 模拟演示模式</h3>
+                <p>这是一个前端模拟版本，展示了系统的完整交互流程。在实际部署中，这些功能会调用真实的AI API。</p>
+            </div>
+            
+            <div class="api-status" id="apiStatus">
+                <span class="status-indicator" id="statusIndicator">🎭</span>
+                <span id="statusText">演示模式：可以体验界面功能</span>
+            </div>
+            
+            <form id="researchForm">
+                <div class="form-group">
+                    <label for="query">研究主题：</label>
+                    <input type="text" id="query" name="query" placeholder="例如：人工智能在医疗领域的最新应用" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="depth">研究深度：</label>
+                    <select id="depth" name="depth">
+                        <option value="1">浅层研究 (1轮)</option>
+                        <option value="2" selected>中等深度 (2轮)</option>
+                        <option value="3">深度研究 (3轮)</option>
+                        <option value="5">超深度 (5轮)</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="focus">研究重点：</label>
+                    <textarea id="focus" name="focus" placeholder="可选：指定您希望重点关注的方面，例如技术细节、市场趋势、实际应用案例等"></textarea>
+                </div>
+                
+                <button type="submit" id="submitBtn">🚀 开始模拟演示</button>
+                <div class="loading" id="loading">正在模拟深度研究过程...</div>
+            </form>
+            
+            <div id="results" style="display: none;">
+                <div class="result-container">
+                    <h3>📊 模拟进度日志</h3>
+                    <div id="eventLog" class="event-log"></div>
+                    
+                    <h3>📋 模拟研究报告</h3>
+                    <div id="finalReport"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API 配置 -->
+        <div id="config" class="tab-content">
+            <h2>🔑 API 密钥配置</h2>
+            <p>在本地运行时，您需要配置相应的API密钥。所有密钥都会安全地存储在您的浏览器本地。</p>
+            
+            <form id="configForm">
+                <div class="form-group">
+                    <label for="exaApiKey">🔍 Exa API Key (必需):</label>
+                    <input type="password" id="exaApiKey" placeholder="输入您的Exa API密钥">
+                    <small>用于网络搜索功能。<a href="https://exa.ai/" target="_blank">获取API密钥</a></small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="analysisProvider">🧠 分析提供商:</label>
+                    <select id="analysisProvider">
+                        <option value="dashscope">DashScope (阿里云)</option>
+                        <option value="openai">OpenAI</option>
+                    </select>
+                </div>
+                
+                <div class="form-group" id="dashscopeConfig">
+                    <label for="dashscopeApiKey">🤖 DashScope API Key:</label>
+                    <input type="password" id="dashscopeApiKey" placeholder="输入您的DashScope API密钥">
+                    <small>用于AI分析功能。<a href="https://dashscope.aliyun.com/" target="_blank">获取API密钥</a></small>
+                </div>
+                
+                <div class="form-group" id="openaiConfig" style="display: none;">
+                    <label for="openaiApiKey">🤖 OpenAI API Key:</label>
+                    <input type="password" id="openaiApiKey" placeholder="输入您的OpenAI API密钥">
+                    <small>用于AI分析功能。<a href="https://platform.openai.com/api-keys" target="_blank">获取API密钥</a></small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="plannerApiKey">🔧 Planner API Key (可选):</label>
+                    <input type="password" id="plannerApiKey" placeholder="输入您的OpenRouter API密钥">
+                    <small>用于智能工具规划。<a href="https://openrouter.ai/" target="_blank">获取API密钥</a></small>
+                </div>
+                
+                <button type="button" onclick="saveConfig()">💾 保存配置</button>
+                <button type="button" onclick="clearConfig()" style="margin-left: 10px; background: #e53e3e;">🗑️ 清除配置</button>
+            </form>
+        </div>
+
+        <!-- 下载说明 -->
+        <div id="download" class="tab-content">
+            <h2>📥 获取完整版本</h2>
+            <p>要使用真实的AI功能，请下载并在本地运行完整版本：</p>
+            
+            <div class="result-container">
+                <h3>🚀 快速开始</h3>
+                <pre><code># 1. 克隆仓库
+git clone https://github.com/MOLAaaaaaaa/MolaGPT-DeepResearch.git
+cd MolaGPT-DeepResearch
+
+# 2. 安装依赖
+composer install
+
+# 3. 配置环境
+cp .env.example .env
+# 编辑 .env 文件，添加您的API密钥
+
+# 4. 启动本地Demo
+cd demo
+php -S localhost:8080</code></pre>
+            </div>
+            
+            <div class="result-container">
+                <h3>📋 所需API密钥</h3>
+                <ul>
+                    <li><strong>Exa API</strong>: 用于网络搜索 - <a href="https://exa.ai/" target="_blank">获取密钥</a></li>
+                    <li><strong>DashScope API</strong>: 用于AI分析 - <a href="https://dashscope.aliyun.com/" target="_blank">获取密钥</a></li>
+                    <li><strong>OpenAI API</strong>: 备选AI分析 - <a href="https://platform.openai.com/api-keys" target="_blank">获取密钥</a></li>
+                    <li><strong>OpenRouter API</strong>: 用于智能工具规划(可选) - <a href="https://openrouter.ai/" target="_blank">获取密钥</a></li>
+                </ul>
+            </div>
+            
+            <div class="result-container">
+                <h3>🎯 功能特色</h3>
+                <ul>
+                    <li>🔄 多轮迭代研究：基于前轮结果深入探索</li>
+                    <li>🧠 智能工具规划：AI驱动的工具选择</li>
+                    <li>🔍 双重信息源：网络搜索 + URL内容提取</li>
+                    <li>⚡ 流式事件机制：实时进度反馈</li>
+                    <li>🔌 多AI提供商支持：DashScope、OpenAI等</li>
+                    <li>🔒 安全配置管理：基于.env文件</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 模拟配置管理
+        function loadConfig() {
+            const config = JSON.parse(localStorage.getItem('deepResearchConfig') || '{}');
+            
+            if (config.exaApiKey) document.getElementById('exaApiKey').value = config.exaApiKey;
+            if (config.dashscopeApiKey) document.getElementById('dashscopeApiKey').value = config.dashscopeApiKey;
+            if (config.openaiApiKey) document.getElementById('openaiApiKey').value = config.openaiApiKey;
+            if (config.plannerApiKey) document.getElementById('plannerApiKey').value = config.plannerApiKey;
+            if (config.analysisProvider) {
+                document.getElementById('analysisProvider').value = config.analysisProvider;
+                toggleAnalysisProvider();
+            }
+        }
+        
+        function saveConfig() {
+            const config = {
+                exaApiKey: document.getElementById('exaApiKey').value,
+                dashscopeApiKey: document.getElementById('dashscopeApiKey').value,
+                openaiApiKey: document.getElementById('openaiApiKey').value,
+                plannerApiKey: document.getElementById('plannerApiKey').value,
+                analysisProvider: document.getElementById('analysisProvider').value
+            };
+            
+            localStorage.setItem('deepResearchConfig', JSON.stringify(config));
+            alert('配置已保存到浏览器本地存储\n\n注意：这是演示版本，配置仅用于界面展示。\n要使用真实功能，请下载完整版本到本地运行。');
+        }
+        
+        function clearConfig() {
+            if (confirm('确定要清除所有配置吗？')) {
+                localStorage.removeItem('deepResearchConfig');
+                document.getElementById('configForm').reset();
+                alert('配置已清除');
+            }
+        }
+        
+        function toggleAnalysisProvider() {
+            const provider = document.getElementById('analysisProvider').value;
+            const dashscopeConfig = document.getElementById('dashscopeConfig');
+            const openaiConfig = document.getElementById('openaiConfig');
+            
+            if (provider === 'dashscope') {
+                dashscopeConfig.style.display = 'block';
+                openaiConfig.style.display = 'none';
+            } else {
+                dashscopeConfig.style.display = 'none';
+                openaiConfig.style.display = 'block';
+            }
+        }
+        
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+            document.getElementById('analysisProvider').addEventListener('change', toggleAnalysisProvider);
+        });
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // 模拟研究演示
+        document.getElementById('researchForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+            const eventLog = document.getElementById('eventLog');
+            const finalReport = document.getElementById('finalReport');
+            
+            submitBtn.disabled = true;
+            loading.style.display = 'block';
+            results.style.display = 'block';
+            eventLog.innerHTML = '';
+            finalReport.innerHTML = '';
+            
+            const formData = new FormData(e.target);
+            const query = formData.get('query');
+            const depth = parseInt(formData.get('depth'));
+            
+            // 模拟研究过程
+            const mockEvents = [
+                { type: 'research_start', message: `开始研究: ${query}`, delay: 500 },
+                { type: 'planning', message: '正在进行智能工具规划...', delay: 1000 },
+                { type: 'search', message: '执行网络搜索，查找相关信息', delay: 1500 },
+                { type: 'analysis', message: '第1轮：分析搜索结果，提取关键信息', delay: 2000 },
+                { type: 'search', message: '基于分析结果，执行深度搜索', delay: 2500 },
+                { type: 'analysis', message: '第2轮：深入分析，识别趋势和模式', delay: 3000 }
+            ];
+            
+            if (depth >= 3) {
+                mockEvents.push(
+                    { type: 'tool', message: '使用URL内容提取工具获取详细信息', delay: 3500 },
+                    { type: 'analysis', message: '第3轮：综合分析，形成深度洞察', delay: 4000 }
+                );
+            }
+            
+            mockEvents.push(
+                { type: 'report', message: '生成最终研究报告...', delay: 4500 },
+                { type: 'complete', message: '研究完成！', delay: 5000 }
+            );
+            
+            for (const event of mockEvents) {
+                await new Promise(resolve => setTimeout(resolve, event.delay));
+                addEventToLog(event, eventLog);
+                
+                if (event.type === 'complete') {
+                    const mockReport = `# ${query} - 深度研究报告
+
+## 📊 研究概述
+本报告通过${depth}轮迭代研究，综合分析了"${query}"的相关信息。
+
+## 🔍 主要发现
+1. **当前发展状态**：该领域正处于快速发展阶段
+2. **关键技术趋势**：多项核心技术正在成熟化
+3. **市场机遇**：存在显著的商业化潜力
+4. **挑战与风险**：需要关注技术和政策风险
+
+## 💡 深度洞察
+通过多轮分析发现，该领域的发展呈现以下特点：
+- 技术创新加速
+- 应用场景扩展
+- 生态系统完善
+
+## 🎯 结论建议
+建议持续关注该领域的发展动态，把握技术变革机遇。
+
+---
+*本报告由MolaGPT深度研究引擎生成*
+*模拟演示版本 - 实际使用请下载完整版*`;
+                    
+                    finalReport.innerHTML = `<pre>${mockReport}</pre>`;
+                }
+            }
+            
+            submitBtn.disabled = false;
+            loading.style.display = 'none';
+        });
+        
+        function addEventToLog(event, container) {
+            const eventDiv = document.createElement('div');
+            eventDiv.className = `event-item`;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const icon = getEventIcon(event.type);
+            
+            eventDiv.innerHTML = `<span style="color: #a0aec0;">[${timestamp}]</span> ${icon} ${event.message}`;
+            
+            container.appendChild(eventDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        function getEventIcon(type) {
+            const icons = {
+                'research_start': '🚀',
+                'planning': '🧠',
+                'search': '🔍',
+                'analysis': '📊', 
+                'tool': '🔧',
+                'report': '📝',
+                'complete': '✅',
+                'error': '❌'
+            };
+            return icons[type] || '📌';
+        }
+    </script>
+</body>
+</html>

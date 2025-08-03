@@ -387,4 +387,4 @@ MIT License
 
 ## 📞 支持
 
-如有问题，请在 GitHub 上创建 Issue 或联系维护者。
+如有问题，请在 GitHub 上创建 Issue 或联系 mola[at]wljay.cn!
